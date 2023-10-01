@@ -18,10 +18,68 @@ pub struct StartResp {}
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct InferReq {
     pub prompt: String,
+    pub config: GenerationConfig,
 }
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct InferResp {
     pub completion: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GenerationConfig {
+    /// Penalty applied to repeating tokens.
+    pub repetition_penalty: f64,
+
+    /// Maximum number of new tokens to generate.
+    pub max_new_tokens: usize,
+
+    /// A value between 0 and 1 that controls randomness in output. 
+    /// Lower values make the output more deterministic.
+    pub temperature: f64,
+
+    /// A value between 0 and 1 that controls the fraction of the 
+    /// probability mass to consider in sampling. 1.0 means consider all.
+    pub top_p: f64,
+
+    /// The number of highest probability tokens to keep for sampling.
+    pub top_k: usize,
+
+    /// Whether to sample from the model's output distribution or just
+    /// take the maximum probability token.
+    pub do_sample: bool,
+
+    /// Whether to use the model's cache in generation.
+    pub use_cache: bool,
+
+    /// Whether to return a dictionary structure in generation.
+    pub return_dict_in_generate: bool,
+
+    /// Whether to output attention values in generation.
+    pub output_attentions: bool,
+
+    /// Whether to output hidden state values in generation.
+    pub output_hidden_states: bool,
+
+    /// Whether to output scores in generation.
+    pub output_scores: bool,
+}
+
+impl Default for GenerationConfig {
+    fn default() -> Self {
+        GenerationConfig {
+            repetition_penalty: 1.1,
+            max_new_tokens: 2000,
+            temperature: 0.05,
+            top_p: 0.95,
+            top_k: 40,
+            do_sample: true,
+            use_cache: true,
+            return_dict_in_generate: true,
+            output_attentions: false,
+            output_hidden_states: false,
+            output_scores: false,
+        }
+    }
 }
 
 impl InferenceServer {
