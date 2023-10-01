@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use anyhow::{bail, anyhow};
+use anyhow::{anyhow, bail};
 
 use anyhow::{Context, Result};
 use jammdb::{Error as JammError, DB};
@@ -13,7 +13,7 @@ pub trait Program {
     fn help() -> String;
     fn run() -> anyhow::Result<String>;
 }
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum User {
     Jake,
     Zack,
@@ -32,7 +32,13 @@ impl ToString for User {
 pub enum Message {
     UserMessage {
         user: User,
-        msg: Option<String>,
+        msg: String,
+        time: SystemTime,
+    },
+    AssistantMessage {
+        user: User,
+        internal_thoughts: String,
+        msg: String,
         time: SystemTime,
     },
 }
@@ -41,19 +47,12 @@ impl Message {
         match &self {
             Message::UserMessage { user, msg, time } => {
                 let datetime: chrono::DateTime<chrono::offset::Utc> = time.clone().into();
-                match msg {
-                    Some(msg) => Ok(format!(
-                        "---\n{} {}:\n{}\n",
-                        datetime.format("%Y-%m-%d %T"),
-                        user.to_string(),
-                        msg
-                    )),
-                    None => Ok(format!(
-                        "---\n{} {}:",
-                        datetime.format("%Y-%m-%d %T"),
-                        user.to_string()
-                    )),
-                }
+                Ok(format!(
+                    "---\n{} {}:\n{}\n",
+                    datetime.format("%Y-%m-%d %T"),
+                    user.to_string(),
+                    msg
+                ))
             }
             _ => {
                 bail!("unimplemented message type to string")
@@ -62,20 +61,43 @@ impl Message {
     }
 }
 
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Conversation {
     pub id: Option<String>,
+
     pub messages: Vec<Message>,
 }
-impl Conversation {
-    pub fn tostr(&self) -> anyhow::Result<String> {
-        let db = &jammdb::DB::open("my-db.db")?;
-        db.tx(true);
-        let mut result = String::new();
-        for m in &self.messages {
-            result.push_str(&m.tostr()?)
+impl Default for Conversation {
+    fn default() -> Self {
+        Self {
+            id: Option::default(),
+            messages: Vec::default(),
         }
-        Ok(result)
+    }
+}
+pub fn messages_tostr(msgs: &[Message]) -> anyhow::Result<String> {
+    let mut result = String::new();
+    for m in msgs {
+        result.push_str(&m.tostr()?)
+    }
+    Ok(result)
+}
+impl Conversation {
+    pub fn to_training_data(&self) -> anyhow::Result<Vec<String>> {
+        let mut data = Vec::new();
+        for (i, m) in self.messages.iter().enumerate() {
+            match m {
+                Message::UserMessage { ref user, .. } => {
+                    if *user == User::Jake {
+                        data.push(messages_tostr(&self.messages[0..=i])?)
+                    }
+                }
+                _ => {
+                    bail!("unimplemented message to training data")
+                }
+            }
+        }
+        return Ok(data);
     }
 }
 
@@ -93,7 +115,7 @@ impl Conversations {
         match create_result {
             Ok(_) => {}
             Err(JammError::BucketExists) => {}
-            Err(e) => anyhow::bail!("failed to create bucket {e}") 
+            Err(e) => anyhow::bail!("failed to create bucket {e}"),
         };
 
         tx.commit()?;
@@ -110,12 +132,12 @@ impl Conversations {
             None => return Ok(None),
         };
 
-        let conv: Conversation = serde_json::from_slice(&data.kv().value())
+        let conv: Conversation = rmp_serde::from_slice(&data.kv().value())
             .context("Failed to deserialize conversation data")?;
         Ok(Some(conv))
     }
 
-    pub fn insert(&mut self, mut to_insert: Conversation) -> Result<String> {
+    pub fn insert(&mut self, to_insert: &mut Conversation) -> Result<String> {
         let uuid = match to_insert.id {
             Some(ref id) => id.clone(),
             None => {
@@ -128,7 +150,7 @@ impl Conversations {
         let tx = self.db.tx(true)?;
         let bucket = tx.get_bucket(self.bucket_name.clone())?;
         let data =
-            serde_json::to_vec(&to_insert).context("Failed to serialize conversation data")?;
+            rmp_serde::to_vec(&to_insert).context("Failed to serialize conversation data")?;
         bucket.put(uuid_clone.as_bytes(), data)?;
         tx.commit()?;
         Ok(uuid)
@@ -152,7 +174,7 @@ impl IntoIterator for Conversations {
         let mut data = Vec::new();
         for k in bucket.into_iter() {
             if let Ok(uuid_str) = std::str::from_utf8(k.kv().key().clone()) {
-                if let Ok(conv) = serde_json::from_slice::<Conversation>(k.kv().value()) {
+                if let Ok(conv) = rmp_serde::from_slice::<Conversation>(k.kv().value()) {
                     data.push((uuid_str.to_string(), conv.clone()));
                 }
             }

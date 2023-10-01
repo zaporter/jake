@@ -25,6 +25,11 @@ pub struct InferResp {
     pub completion: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TrainReq {}
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TrainResp {}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GenerationConfig {
     /// Penalty applied to repeating tokens.
@@ -33,11 +38,11 @@ pub struct GenerationConfig {
     /// Maximum number of new tokens to generate.
     pub max_new_tokens: usize,
 
-    /// A value between 0 and 1 that controls randomness in output. 
+    /// A value between 0 and 1 that controls randomness in output.
     /// Lower values make the output more deterministic.
     pub temperature: f64,
 
-    /// A value between 0 and 1 that controls the fraction of the 
+    /// A value between 0 and 1 that controls the fraction of the
     /// probability mass to consider in sampling. 1.0 means consider all.
     pub top_p: f64,
 
@@ -95,6 +100,10 @@ impl InferenceServer {
 
     pub async fn infer(&mut self, body: InferReq) -> anyhow::Result<InferResp> {
         self.run("infer", body).await
+    }
+
+    pub async fn train(&mut self, body: TrainReq) -> anyhow::Result<TrainResp> {
+        self.run("train", body).await
     }
     pub async fn run<S: AsRef<str>, B: serde::Serialize, T: for<'de> serde::Deserialize<'de>>(
         &mut self,
