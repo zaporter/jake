@@ -1,0 +1,21 @@
+${gpt4: "What is the square root of 2?"}
+${sh: "pwd"}
+${docker: "start", args: ["nointeractive"]}
+${sh: "help"}
+${docker: "help"}
+${gpt4: "help"}
+${sh: "cd ..; echo `pwd`"}
+${mes}
+${docker start}
+${sh help}
+${help}
+${sh pwd}
+<<sh pwd>>
++./home/zack/tools
+<</sh pwd>>
+sh pwd:
++./home/zack/tools
+${sh apt install k}
+sh apt install k:
++./home/zack/tools
+FAIL: command failed

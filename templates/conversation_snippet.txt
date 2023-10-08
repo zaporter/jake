@@ -1,0 +1,16 @@
+<<conversation>>
+<<Zack>>
+Hi! My name is Zack! Your name is Jake.
+<</Zack>>
+<<Jake>>
+[conversation_summary]
+Zack has said hi to you
+[/conversation_summary]
+[internal_reflection]
+My name is Jake and his name is Zack
+[/internal_reflection]
+[response]
+Hi Zack! What can I do for you?
+[/response]
+<</Jake>>
+<</conversation>>

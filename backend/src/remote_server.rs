@@ -1,6 +1,16 @@
-pub struct InferenceServer {
-    url: String,
-}
+use async_trait::async_trait;
+use chrono::Duration;
+use egui::Ui;
+use std::{
+    any::Any,
+    collections::HashMap,
+    fmt::{Debug, Display},
+    path::PathBuf,
+    sync::{Arc, Mutex, RwLock},
+    thread,
+    time::SystemTime,
+};
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub enum ServerRequestBody {
     Start { req: String },
@@ -10,10 +20,51 @@ pub enum ServerRequestBody {
 pub struct ServerInfo {
     hostname: String,
 }
+#[derive(PartialEq, Eq, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct StatusType(&'static str);
+impl StatusType {
+    const READY: Self = Self("ready");
+    const TRAINING: Self = Self("training");
+    const LOADING_MODEL: Self = Self("loading_model");
+    const INFERING: Self = Self("infering");
+    const ERROR: Self = Self("error");
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Status {
+    op_id: Option<String>,
+    #[serde(flatten)]
+    status_body: StatusBody,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "status_code")]
+#[serde(rename_all = "snake_case")]
+pub enum StatusBody {
+    Ready {},
+    Training {
+        epoch: usize,
+        total_epochs: usize,
+        loss: f64,
+    },
+    LoadingModel {},
+    Infering {},
+    Error {
+        msg: String,
+    },
+}
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct StartReq {}
+pub struct StatusReq {}
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct StartResp {}
+pub struct StatusResp {
+    operation_id: String,
+    status: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct AxolotlConfigOverrides {
+    overrides: HashMap<String, String>,
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct InferReq {
@@ -30,72 +81,145 @@ pub struct TrainReq {}
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TrainResp {}
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct GenerationConfig {
-    /// Penalty applied to repeating tokens.
-    pub repetition_penalty: f64,
+pub struct Operation {
+    op_id: String,
+    req: Box<dyn OperationRequest>,
+    response: Option<anyhow::Result<Box<dyn OperationResult + Send>>>,
+    status: Option<anyhow::Result<Box<dyn OperationStatus + Send>>>,
+}
+impl Operation {
+    fn draw(&self, ui: &mut Ui) -> anyhow::Result<()> {
+        ui.label("hi");
+        Ok(())
+    }
+}
+#[async_trait]
+pub trait OperationRequest: mopa::Any + Debug + Send + Sync {
+    async fn run(&self, srv: InferenceServer) -> anyhow::Result<Box<dyn OperationResult + Send>>;
+    async fn status(&self, srv: InferenceServer) -> anyhow::Result<Box<dyn OperationStatus>>;
+    fn draw(&self, ui: &mut Ui) -> anyhow::Result<()>;
+}
+mopafy!(OperationRequest);
 
-    /// Maximum number of new tokens to generate.
-    pub max_new_tokens: usize,
-
-    /// A value between 0 and 1 that controls randomness in output.
-    /// Lower values make the output more deterministic.
-    pub temperature: f64,
-
-    /// A value between 0 and 1 that controls the fraction of the
-    /// probability mass to consider in sampling. 1.0 means consider all.
-    pub top_p: f64,
-
-    /// The number of highest probability tokens to keep for sampling.
-    pub top_k: usize,
-
-    /// Whether to sample from the model's output distribution or just
-    /// take the maximum probability token.
-    pub do_sample: bool,
-
-    /// Whether to use the model's cache in generation.
-    pub use_cache: bool,
-
-    /// Whether to return a dictionary structure in generation.
-    pub return_dict_in_generate: bool,
-
-    /// Whether to output attention values in generation.
-    pub output_attentions: bool,
-
-    /// Whether to output hidden state values in generation.
-    pub output_hidden_states: bool,
-
-    /// Whether to output scores in generation.
-    pub output_scores: bool,
+pub trait OperationStatus: Debug + Send + Sync {
+    fn draw(&self, ui: &mut Ui) -> anyhow::Result<()>;
 }
 
-impl Default for GenerationConfig {
-    fn default() -> Self {
-        GenerationConfig {
-            repetition_penalty: 1.1,
-            max_new_tokens: 2000,
-            temperature: 0.05,
-            top_p: 0.95,
-            top_k: 40,
-            do_sample: true,
-            use_cache: true,
-            return_dict_in_generate: true,
-            output_attentions: false,
-            output_hidden_states: false,
-            output_scores: false,
-        }
+pub trait OperationResult: Debug + Send + Sync {}
+
+#[derive(Debug)]
+pub struct LoadModelReq {
+    data: String,
+}
+// impl OperationRequest for LoadModelReq {
+//     fn run(&self) -> anyhow::Result<Box<dyn OperationResult>> {
+//         anyhow::bail!("unimpl")
+//     }
+//     fn draw(&self, ui: &mut Ui) -> anyhow::Result<()> {
+//         anyhow::bail!("unimpl")
+//     }
+//     fn status(&self) -> anyhow::Result<Box<dyn OperationStatus>> {
+//         anyhow::bail!("unimpl")
+//     }
+// }
+pub struct LoadModelStatus {}
+pub struct LoadModelResponse {}
+#[derive(Debug, serde::Serialize)]
+pub struct InferenceReq {
+    pub prompt: String,
+}
+#[async_trait]
+impl OperationRequest for InferenceReq {
+    async fn run(&self, srv: InferenceServer) -> anyhow::Result<Box<dyn OperationResult + Send>> {
+        let result: InferenceResponse = srv.run("infer", self).await?;
+        Ok(Box::new(result))
+    }
+    async fn status(&self, srv: InferenceServer) -> anyhow::Result<Box<dyn OperationStatus>> {
+        let result: InferenceStatus = srv.run("stat_infer", self).await?;
+        Ok(Box::new(result))
+    }
+    fn draw(&self, ui: &mut Ui) -> anyhow::Result<()> {
+        ui.label("inference");
+        Ok(())
+    }
+}
+#[derive(Debug, serde::Deserialize)]
+pub struct InferenceStatus {}
+impl OperationStatus for InferenceStatus {
+    fn draw(&self, ui: &mut Ui) -> anyhow::Result<()> {
+        ui.label("status");
+        Ok(())
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct InferenceResponse {}
+impl OperationResult for InferenceResponse {}
+
+pub struct ServerOperationManager {
+    inner: Arc<RwLock<ServerOperationManagerInternal>>,
+    srv: InferenceServer,
+}
+pub struct ServerOperationManagerInternal {
+    operations: Vec<Arc<RwLock<Operation>>>,
+    simple_status: String,
+    status_refresh: SystemTime,
+}
+impl ServerOperationManager {
+    fn start_main_thread(&self) -> anyhow::Result<()> {
+        let inner = self.inner.clone();
+        let srv = self.srv.clone();
+        thread::spawn(move || {
+            // Process each socket concurrently.
+            loop {
+                let _ = tokio::time::sleep(tokio::time::Duration::from_millis(1000));
+                let mut operation = None;
+                {
+                    let in_read = inner.read().unwrap();
+                    if let Some(op) = in_read.operations.get(0) {
+                        operation = Some(Arc::clone(op));
+                    }
+                }
+                if let Some(op) = operation {
+                    let res = {
+                        let op_read = op.read().unwrap();
+                        futures::executor::block_on(op_read.req.run(srv.clone()))
+                    };
+                    let mut op_write = op.write().unwrap();
+                    op_write.response = Some(res);
+                }
+            }
+        });
+        Ok(())
+    }
+    fn draw(&self, ui: &mut Ui) -> anyhow::Result<()> {
+        let inner = self.inner.read().unwrap();
+        let mut result = Ok(());
+        ui.label("ok");
+        // ui.group(|ui| {
+        //     for op in &inner.operations {
+        //         if let Err(e) = op.draw(ui) {
+        //             result = Err(e);
+        //             return;
+        //         }
+        //         // match op.req.downcast_ref::<LoadModelReq>() {
+        //         //     Some(b) => {
+        //         //         println!("{}", b.data)
+        //         //     }
+        //         //     None => {
+        //         //         panic!("fuck")
+        //         //     }
+        //         // }
+        //     }
+        // });
+        result
+    }
+}
 impl InferenceServer {
     pub fn new<S: AsRef<str>>(url: S) -> Self {
         Self {
             url: url.as_ref().into(),
         }
-    }
-
-    pub async fn start(&mut self, body: StartReq) -> anyhow::Result<StartResp> {
-        self.run("start", body).await
     }
 
     pub async fn infer(&mut self, body: InferReq) -> anyhow::Result<InferResp> {
@@ -106,7 +230,7 @@ impl InferenceServer {
         self.run("train", body).await
     }
     pub async fn run<S: AsRef<str>, B: serde::Serialize, T: for<'de> serde::Deserialize<'de>>(
-        &mut self,
+        &self,
         route: S,
         req: B,
     ) -> anyhow::Result<T> {

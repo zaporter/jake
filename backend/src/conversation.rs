@@ -28,7 +28,7 @@ impl ToString for User {
 }
 
 #[non_exhaustive]
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Message {
     UserMessage {
         user: User,
@@ -42,10 +42,25 @@ pub enum Message {
         time: SystemTime,
     },
 }
+
 impl Message {
-    pub fn tostr(&self) -> anyhow::Result<String> {
+    pub fn to_training_data(&self) -> anyhow::Result<String> {
         match &self {
             Message::UserMessage { user, msg, time } => {
+                let datetime: chrono::DateTime<chrono::offset::Utc> = time.clone().into();
+                Ok(format!(
+                    "---\n{} {}:\n{}\n",
+                    datetime.format("%Y-%m-%d %T"),
+                    user.to_string(),
+                    msg
+                ))
+            }
+            Message::AssistantMessage {
+                user,
+                msg,
+                internal_thoughts,
+                time,
+            } => {
                 let datetime: chrono::DateTime<chrono::offset::Utc> = time.clone().into();
                 Ok(format!(
                     "---\n{} {}:\n{}\n",
@@ -59,9 +74,25 @@ impl Message {
             }
         }
     }
+    pub fn default_user_msg() -> Self {
+        Message::UserMessage {
+            user: User::Zack,
+            msg: String::new(),
+            time: SystemTime::now(),
+        }
+    }
+
+    pub fn default_assistant_msg() -> Self {
+        Message::AssistantMessage {
+            user: User::Jake,
+            internal_thoughts: String::new(),
+            msg: String::new(),
+            time: SystemTime::now(),
+        }
+    }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Conversation {
     pub id: Option<String>,
 
@@ -78,7 +109,7 @@ impl Default for Conversation {
 pub fn messages_tostr(msgs: &[Message]) -> anyhow::Result<String> {
     let mut result = String::new();
     for m in msgs {
-        result.push_str(&m.tostr()?)
+        result.push_str(&m.to_training_data()?)
     }
     Ok(result)
 }
@@ -87,14 +118,12 @@ impl Conversation {
         let mut data = Vec::new();
         for (i, m) in self.messages.iter().enumerate() {
             match m {
-                Message::UserMessage { ref user, .. } => {
+                Message::AssistantMessage { ref user, .. } => {
                     if *user == User::Jake {
                         data.push(messages_tostr(&self.messages[0..=i])?)
                     }
                 }
-                _ => {
-                    bail!("unimplemented message to training data")
-                }
+                _ => {}
             }
         }
         return Ok(data);
@@ -154,6 +183,14 @@ impl Conversations {
         bucket.put(uuid_clone.as_bytes(), data)?;
         tx.commit()?;
         Ok(uuid)
+    }
+
+    pub fn delete(&mut self, uuid: &str) -> Result<()> {
+        let tx = self.db.tx(true)?;
+        let bucket = tx.get_bucket(self.bucket_name.clone())?;
+        bucket.delete(uuid)?;
+        tx.commit()?;
+        Ok(())
     }
 }
 

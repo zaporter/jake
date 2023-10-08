@@ -1,0 +1,1 @@
+docker run --gpus all --name jake-inference --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -p 9090:9090 --rm --privileged -v /home/zack/personal/jake:/app -w /app jake-axolotl "/app/axolotl/run.sh"

@@ -1,6 +1,9 @@
 use tera::Tera;
 
-use crate::conversation::{self, Conversation};
+use crate::{
+    conversation::{self, Conversation},
+    model_server,
+};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SummaryMsg {
@@ -18,7 +21,7 @@ pub struct PromptDetails {
 }
 
 pub fn get_tera() -> anyhow::Result<Tera> {
-    Ok(Tera::new("../templates/*.template")?)
+    Ok(Tera::new("./templates/*.template")?)
 }
 pub fn summarize(details: &SummaryDetails) -> anyhow::Result<String> {
     let tera = get_tera()?;
@@ -28,12 +31,16 @@ pub fn summarize(details: &SummaryDetails) -> anyhow::Result<String> {
     )?;
     Ok(result)
 }
-pub fn prompt(details : &PromptDetails) -> anyhow::Result<String> {
+pub fn start_inference(config: &model_server::InferenceServerArgs) -> anyhow::Result<String> {
     let tera = get_tera()?;
     let result = tera.render(
-        "prompt.template",
-        &tera::Context::from_serialize(details)?,
+        "start_inference.template",
+        &tera::Context::from_serialize(config)?,
     )?;
     Ok(result)
-
+}
+pub fn prompt(details: &PromptDetails) -> anyhow::Result<String> {
+    let tera = get_tera()?;
+    let result = tera.render("prompt.template", &tera::Context::from_serialize(details)?)?;
+    Ok(result)
 }
