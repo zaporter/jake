@@ -1,11 +1,30 @@
-<<Zack>>
+History:
+Zack: Chicken
+Docker: [Started...]
+Zack: Can you write a rust program the generates the square root of 2 to 100 digits? (test it in docker)
+Okay.
 
-<</Zack>>
+Lets start byu getting a docker container ready
+{docker start}
+--- end --
 
-<<System>>
-Time: 2023-09-29 21:07
-Remaining Context:3000
-<</System>>
-<<Jake>>
+-- new convo with the same context but with the output from docker 
 
-<</Jake>>
+{sh cargo new sqrt2}
+{sh cd sqrt2}
+{sh cargo add rug}
+{sh cargo build}
+{sh cat sqrt2/src/main.rs << EOF
+fn sqrt2() -> Rug::float {
+}
+#[tests]
+mod tests{
+#[test]
+fn testsqrt(){
+}
+
+}
+EOF}
+{sh cargo test}
+--- end --
+

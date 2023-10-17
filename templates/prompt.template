@@ -1,5 +1,12 @@
-<<history>>
-{{conversation -}}
-<</history>>
-
-Jake:
+[[meta]]
+{% for entry in meta -%}
+{{entry.key}}:
+{{entry.value}}
+{%- endfor %}
+[[history]]
+{% for msg in msgs -%}
+{{msg.author}}:
+{{msg.value}}
+{% endfor -%}
+[[response]]
+{{response-}}

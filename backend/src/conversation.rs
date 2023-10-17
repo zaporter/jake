@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::SystemTime;
 
 use anyhow::{anyhow, bail};
@@ -7,6 +8,10 @@ use jammdb::{Error as JammError, DB};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
+
+use crate::templates::{
+    self, MessagePromptTemplateEntry, MetadataPromptTemplateEntry, PromptTemplateData,
+};
 pub enum Programs {}
 
 pub trait Program {
@@ -17,85 +22,52 @@ pub trait Program {
 pub enum User {
     Jake,
     Zack,
+    Docker,
 }
 impl ToString for User {
     fn to_string(&self) -> String {
         match self {
             Self::Jake => String::from("Jake"),
             Self::Zack => String::from("Zack"),
+            Self::Docker => String::from("Docker"),
         }
     }
 }
+#[derive(Clone, PartialEq, Default, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Metadata {}
 
-#[non_exhaustive]
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum Message {
-    UserMessage {
-        user: User,
-        msg: String,
-        time: SystemTime,
-    },
-    AssistantMessage {
-        user: User,
-        internal_thoughts: String,
-        msg: String,
-        time: SystemTime,
-    },
+pub struct Message {
+    pub time: SystemTime,
+    pub meta: Metadata,
+    pub user: User,
+    pub msg: String,
 }
 
 impl Message {
-    pub fn to_training_data(&self) -> anyhow::Result<String> {
-        match &self {
-            Message::UserMessage { user, msg, time } => {
-                let datetime: chrono::DateTime<chrono::offset::Utc> = time.clone().into();
-                Ok(format!(
-                    "---\n{} {}:\n{}\n",
-                    datetime.format("%Y-%m-%d %T"),
-                    user.to_string(),
-                    msg
-                ))
-            }
-            Message::AssistantMessage {
-                user,
-                msg,
-                internal_thoughts,
-                time,
-            } => {
-                let datetime: chrono::DateTime<chrono::offset::Utc> = time.clone().into();
-                Ok(format!(
-                    "---\n{} {}:\n{}\n",
-                    datetime.format("%Y-%m-%d %T"),
-                    user.to_string(),
-                    msg
-                ))
-            }
-            _ => {
-                bail!("unimplemented message type to string")
-            }
-        }
+    pub fn to_prompt_template(&self) -> anyhow::Result<MessagePromptTemplateEntry> {
+        let mut message = String::new();
+        message += "  ";
+        message += &self.msg.replace("\n", "\n\t");
+        Ok(MessagePromptTemplateEntry {
+            author: self.user.to_string(),
+            value: message,
+        })
     }
-    pub fn default_user_msg() -> Self {
-        Message::UserMessage {
-            user: User::Zack,
-            msg: String::new(),
-            time: SystemTime::now(),
-        }
-    }
-
-    pub fn default_assistant_msg() -> Self {
-        Message::AssistantMessage {
-            user: User::Jake,
-            internal_thoughts: String::new(),
-            msg: String::new(),
-            time: SystemTime::now(),
-        }
+    pub fn to_meta_entries(&self) -> anyhow::Result<Vec<MetadataPromptTemplateEntry>> {
+        let mut res = Vec::new();
+        let datetime: chrono::DateTime<chrono::offset::Utc> = self.time.clone().into();
+        res.push(MetadataPromptTemplateEntry {
+            key: "Time".to_string(),
+            value: datetime.format("%Y-%m-%d %T").to_string(),
+        });
+        Ok(res)
     }
 }
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Conversation {
     pub id: Option<String>,
-
     pub messages: Vec<Message>,
 }
 impl Default for Conversation {
@@ -106,27 +78,64 @@ impl Default for Conversation {
         }
     }
 }
-pub fn messages_tostr(msgs: &[Message]) -> anyhow::Result<String> {
-    let mut result = String::new();
-    for m in msgs {
-        result.push_str(&m.to_training_data()?)
+pub fn messages_prompt_data(
+    prev_msgs: &[Message],
+    curr_msg: &Message,
+) -> anyhow::Result<PromptTemplateData> {
+    let mut data = PromptTemplateData::default();
+
+    data.meta = curr_msg.to_meta_entries().context("get meta entries")?;
+    data.response = curr_msg.msg.clone();
+    for m in prev_msgs {
+        data.msgs
+            .push(m.to_prompt_template().context("to prompt template")?)
     }
-    Ok(result)
+    Ok(data)
 }
+
 impl Conversation {
+    pub fn msg_training_data(&self, i: usize) -> anyhow::Result<String> {
+        let m = self.messages.get(i).ok_or(anyhow!(
+            "i {} not in messages {}",
+            i,
+            self.messages.len()
+        ))?;
+        if m.user != User::Jake {
+            bail!(
+                "tried to get training data for non jake user {}, {}",
+                m.user.to_string(),
+                i
+            )
+        }
+        let prompt_data = messages_prompt_data(&self.messages[0..i], &self.messages[i])
+            .context("getting messages prompt data")?;
+        templates::prompt(&prompt_data)
+    }
     pub fn to_training_data(&self) -> anyhow::Result<Vec<String>> {
         let mut data = Vec::new();
-        for (i, m) in self.messages.iter().enumerate() {
-            match m {
-                Message::AssistantMessage { ref user, .. } => {
-                    if *user == User::Jake {
-                        data.push(messages_tostr(&self.messages[0..=i])?)
-                    }
-                }
-                _ => {}
+        for i in 0..self.messages.len() {
+            if self.messages[i].user == User::Jake {
+                data.push(self.msg_training_data(i)?)
             }
         }
         return Ok(data);
+    }
+    pub fn write_jsonl<W: std::io::Write>(&self, writer: &mut W) -> anyhow::Result<()> {
+        let training_data = self.to_training_data()?;
+        #[derive(Serialize)]
+        struct Data {
+            text: String,
+        }
+        for msg in training_data {
+            // We use to_string here instead of to_vec because it verifies that the JSON is valid UTF-8,
+            // which is required by the JSON Lines specification (https://jsonlines.org).
+            let json = serde_json::to_string(&Data { text: msg })?;
+
+            writer.write_all(json.as_bytes())?;
+            writer.write_all(b"\n")?;
+        }
+
+        Ok(())
     }
 }
 

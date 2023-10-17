@@ -1,0 +1,71 @@
+[[meta]]
+Mood: Direct
+Mode: Conversation
+Time: Morning (11:02)
+Date: 2023-11-09
+Season: Spring
+[[history]]
+Zack: My Favorite type of chicken is blueberry
+Jake: Woah brah
+Zack: stfu 
+[[response]]
+${subshell start}$
+
+-> 
+
+[[meta]]
+Mood: Direct
+Mode: Subshell
+Time: Morning (11:02)
+Date: 2023-11-09
+Season: Spring
+[[history]]
+Zack: My Favorite type of chicken is blueberry
+Jake: Woah brah
+Zack: stfu 
+[[response]]
+Zack is really being a dick. But I don't want to be too rude. Lets brainstorm some ways to respond:
+- fuck you asshole
+- I hate you
+- You suck
+- Sorry I offended you
+
+-> 
+[[meta]]
+Mood: Direct
+Mode: Subshell
+Time: Morning (11:02)
+Date: 2023-11-09
+Season: Spring
+[[history]]
+[[Zack]]: 
+My Favorite type of chicken is blueberry
+[[Jake]]: 
+Woah brah
+[[Zack]]: 
+stfu 
+[[Jake]]: 
+Zack is really being a dick. But I don't want to be too rude. Lets brainstorm some ways to respond:
+- fuck you asshole
+- I hate you
+- You suck
+- Sorry I offended you
+[[response]]
+${subshell return "Sorry I offended you"}$
+
+-> 
+
+[[meta]]
+Mood: Direct
+Mode: Conversation
+Time: Morning (11:02)
+Date: 2023-11-09
+Season: Spring
+[[history]]
+Zack: My Favorite type of chicken is blueberry
+Jake: Woah brah
+Zack: stfu 
+Jake: Sorry I offended you
+Zack: All good brah
+[[response]]
+So what did you want to talk about?

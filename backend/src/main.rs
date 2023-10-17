@@ -6,6 +6,7 @@ mod frontend;
 mod model_server;
 mod openai;
 mod templates;
+mod nexos;
 use anyhow::Context;
 use clap::Parser;
 use std::{sync::Arc, time::SystemTime};

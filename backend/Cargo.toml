@@ -8,16 +8,21 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.75"
 async-trait = "0.1.73"
+bollard = "0.15.0"
 chrono = { version = "0.4.31", features = ["serde"] }
 clap = { version = "4.4.6", features = ["derive"] }
+derivative = "2.2.0"
 eframe = { version = "0.23.0", features = ["serde"] }
 egui = { version = "0.23.0", features = ["serde"] }
 egui_extras = { version = "0.23.0", features = ["file", "chrono", "datepicker", "image", "http"] }
 env_logger = "0.10.0"
 futures = "0.3.28"
+futures-util = "0.3.28"
 jammdb = "0.10.0"
+jsonl = "4.0.1"
 mopa = "0.2.2"
 openai_api_rust = "0.1.8"
+regex = "1.10.1"
 reqwest = { version = "0.11.20", features = ["json"] }
 rmp-serde = "1.1.2"
 serde = { version = "1.0.188", features = ["derive"] }

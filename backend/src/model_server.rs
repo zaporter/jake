@@ -81,9 +81,9 @@ pub struct StatusResp {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct CancelReq {}
+pub struct StopReq {}
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct CancelResp {}
+pub struct StopResp {}
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct InferResp {}
@@ -169,6 +169,15 @@ impl InferenceServer {
         // Call the asynchronous connect method using the runtime.
         return rt.block_on(self.inferreq(body));
     }
+
+    pub fn stop(&mut self) -> anyhow::Result<StopResp> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        // Call the asynchronous connect method using the runtime.
+        return rt.block_on(self.stop_req(StopReq {}));
+    }
     fn internal_get_status(&mut self) -> anyhow::Result<ServerStatus> {
         println!("checking status");
 
@@ -202,13 +211,13 @@ impl InferenceServer {
         runreq(self.get_url(), "infer", body).await
     }
 
-    pub async fn cancel(&mut self, body: CancelReq) -> anyhow::Result<CancelResp> {
-        runreq(self.get_url(), "cancel", body).await
+    pub async fn stop_req(&mut self, body: StopReq) -> anyhow::Result<StopResp> {
+        runreq(self.get_url(), "stop", body).await
     }
     fn get_url(&self) -> String {
         format!("http://localhost:{}", self.config.port)
     }
-    pub fn stop(&mut self) -> anyhow::Result<()> {
+    pub fn shutdown(mut self) -> anyhow::Result<()> {
         Ok(self.process_handle.kill().context("process kill")?)
     }
 }

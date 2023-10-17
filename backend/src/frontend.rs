@@ -1,4 +1,5 @@
 use std::{
+    fs::File,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -7,8 +8,9 @@ use eframe::egui;
 use egui::{Ui, Widget, WidgetInfo};
 
 use crate::{
-    conversation::{Conversation, Conversations, Message, User},
+    conversation::{Conversation, Conversations, Message, Metadata, User},
     model_server::{GenerationConfig, InferReq, InferenceServerArgs, ServerManager, ServerStatus},
+    nexos::{extract_commands, LogLine, NexosInstance},
 };
 pub fn launch_gui(conversations: Conversations) -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
@@ -95,65 +97,132 @@ impl eframe::App for MyApp {
                             if let Ok(Some(conversation)) = conversation {
                                 let mut c_conversation = conversation.clone();
                                 let mut to_delete = None;
+                                let mut to_add: Vec<(usize, Message)> = Vec::new();
                                 for i in 0..conversation.messages.len() {
                                     ui.group(|ui| {
                                         if ui.button("delete").clicked() {
                                             to_delete = Some(i);
                                         }
-                                        match &mut c_conversation.messages[i] {
-                                            crate::conversation::Message::UserMessage {
-                                                user,
-                                                msg,
-                                                time,
-                                            } => {
-                                                let datetime: chrono::DateTime<
-                                                    chrono::offset::Utc,
-                                                > = time.clone().into();
-                                                // ui.label(format!("{}", chrono::DateTime));
-                                                ui.label(
-                                                    datetime.format("%Y-%m-%d %T").to_string(),
-                                                );
-                                                ui.label(format!("{}:  {}", user.to_string(), msg));
-                                                let output = egui::TextEdit::multiline(msg)
-                                                    .hint_text("Type something!")
-                                                    .show(ui);
+                                        let Message {
+                                            ref user,
+                                            ref mut msg,
+                                            ref time,
+                                            ..
+                                        } = c_conversation.messages[i];
+                                        let datetime: chrono::DateTime<chrono::offset::Utc> =
+                                            time.clone().into();
+                                        // ui.label(format!("{}", chrono::DateTime));
+                                        ui.label(datetime.format("%Y-%m-%d %T").to_string());
+                                        ui.label(format!("{}:", user.to_string()));
+                                        let output = egui::TextEdit::multiline(msg)
+                                            .hint_text("Type something!")
+                                            .show(ui);
+                                        if ui.button("eval").clicked() {
+                                            let commands = extract_commands(&msg);
+                                            dbg!(&commands);
+                                            for command in commands {
+                                                let mut out = NexosInstance {};
+                                                let req = out.exec_simple(&command);
+
+                                                let rt =
+                                                    tokio::runtime::Builder::new_current_thread()
+                                                        .enable_all()
+                                                        .build()
+                                                        .unwrap();
+
+                                                // Call the asynchronous connect method using the runtime.
+                                                let result = rt.block_on(req).unwrap();
+                                                let mut msg = String::new();
+                                                for line in &result.output {
+                                                    match line {
+                                                        LogLine::StdOut { message } => {
+                                                            msg += message
+                                                        }
+                                                        LogLine::StdErr { message } => {
+                                                            msg += message
+                                                        }
+                                                    }
+                                                }
+
+                                                to_add.push((
+                                                    i+1,
+                                                    Message {
+                                                        time: SystemTime::now(),
+                                                        user: User::Docker,
+                                                        meta: Metadata::default(),
+                                                        msg,
+                                                    },
+                                                ))
                                             }
-                                            crate::conversation::Message::AssistantMessage {
-                                                user,
-                                                internal_thoughts,
-                                                msg,
-                                                time,
-                                            } => {
-                                                let datetime: chrono::DateTime<
-                                                    chrono::offset::Utc,
-                                                > = time.clone().into();
-                                                // ui.label(format!("{}", chrono::DateTime));
-                                                ui.label(
-                                                    datetime.format("%Y-%m-%d %T").to_string(),
-                                                );
-                                                ui.label(format!("{}:  {}", user.to_string(), msg));
-                                                let output =
-                                                    egui::TextEdit::multiline(internal_thoughts)
-                                                        .hint_text("Type something!")
-                                                        .show(ui);
-                                                let output = egui::TextEdit::multiline(msg)
-                                                    .hint_text("Type something!")
-                                                    .show(ui);
-                                            }
-                                            _ => {}
                                         }
+                                        if *user == User::Jake {
+                                            if let Some(ref is) =
+                                                self.server_manager.inference_server
+                                            {
+                                                ui.label("Inference server");
+                                                let status = is.lock().unwrap().status().cloned();
+                                                if status.is_err() {
+                                                    ui.label(format!("Status error {:?}", status));
+                                                    return;
+                                                }
+                                                let status = status.unwrap();
+                                                if let ServerStatus::Ready { .. }
+                                                | ServerStatus::DoneGenerating { .. } = status
+                                                {
+                                                    if ui.button("infer").clicked() {
+                                                        println!(
+                                                            "{:?}",
+                                                            conversation.msg_training_data(i)
+                                                        );
+                                                        let prompt =
+                                                            conversation.msg_training_data(i);
+                                                        if let Ok(prompt) = prompt {
+                                                            let resp = is
+                                                                .lock()
+                                                                .unwrap()
+                                                                .infer(InferReq {
+                                                                    prompt,
+                                                                    config:
+                                                                        GenerationConfig::default(),
+                                                                })
+                                                                .unwrap();
+                                                            println!("{:?}", resp)
+                                                        }
+                                                    }
+                                                };
+
+                                                if let ServerStatus::DoneGenerating { text: val } =
+                                                    status
+                                                {
+                                                    if ui.button("copy into").clicked() {
+                                                        *msg = String::from(val);
+                                                    }
+                                                }
+                                            };
+                                        };
                                     });
                                 }
                                 if ui.button("+ User").clicked() {
-                                    c_conversation.messages.push(Message::default_user_msg())
+                                    c_conversation.messages.push(Message {
+                                        time: SystemTime::now(),
+                                        user: User::Zack,
+                                        meta: Metadata::default(),
+                                        msg: String::new(),
+                                    })
                                 }
                                 if ui.button("+ Assistant").clicked() {
-                                    c_conversation
-                                        .messages
-                                        .push(Message::default_assistant_msg())
+                                    c_conversation.messages.push(Message {
+                                        time: SystemTime::now(),
+                                        user: User::Jake,
+                                        meta: Metadata::default(),
+                                        msg: String::new(),
+                                    })
                                 }
                                 if let Some(i) = to_delete {
                                     c_conversation.messages.remove(i);
+                                }
+                                for (i, msg) in to_add.into_iter().rev() {
+                                    c_conversation.messages.insert(i, msg)
                                 }
                                 if c_conversation != conversation {
                                     let res = self.conversations.insert(&mut c_conversation);
@@ -177,6 +246,7 @@ impl eframe::App for MyApp {
 
                 ui.vertical(|ui| {
                     egui::ScrollArea::vertical()
+                        .max_width(500.0)
                         .id_source("data_info")
                         .show(ui, |ui| {
                             if let Some(ref convo_id) = self.selected_convo {
@@ -186,7 +256,12 @@ impl eframe::App for MyApp {
                                         Ok(data) => {
                                             for datum in data {
                                                 ui.group(|ui| {
-                                                    ui.label(datum);
+                                                    ui.add(
+                                                        egui::TextEdit::multiline(
+                                                            &mut datum.clone(),
+                                                        )
+                                                        .text_style(egui::TextStyle::Body),
+                                                    )
                                                 });
                                             }
                                         }
@@ -215,9 +290,24 @@ impl eframe::App for MyApp {
                                 match status {
                                     ServerStatus::Generating { text } => {
                                         ui.label(text);
+                                        if ui.button("stop").clicked() {
+                                            is.lock().unwrap().stop().unwrap();
+                                        }
                                     }
                                     ServerStatus::DoneGenerating { text } => {
                                         ui.label(text);
+                                        if ui.button("infer!").clicked() {
+                                            println!("inferclicked");
+                                            let resp = is
+                                                .lock()
+                                                .unwrap()
+                                                .infer(InferReq {
+                                                    prompt: "the average".to_owned(),
+                                                    config: GenerationConfig::default(),
+                                                })
+                                                .unwrap();
+                                            println!("{:?}", resp)
+                                        }
                                     }
                                     ServerStatus::Ready {} => {
                                         if ui.button("infer!").clicked() {
@@ -226,7 +316,7 @@ impl eframe::App for MyApp {
                                                 .lock()
                                                 .unwrap()
                                                 .infer(InferReq {
-                                                    prompt: "hi my name is ".to_owned(),
+                                                    prompt: "the length of".to_owned(),
                                                     config: GenerationConfig::default(),
                                                 })
                                                 .unwrap();
@@ -246,6 +336,18 @@ impl eframe::App for MyApp {
                                         });
                                     dbg!(&res);
                                 };
+                            }
+                        }
+                    });
+                });
+
+                ui.vertical(|ui| {
+                    ui.group(|ui| {
+                        if ui.button("export data").clicked() {
+                            let mut file = File::create("data.jsonl").unwrap();
+
+                            for (_, c) in self.conversations.clone().into_iter() {
+                                c.write_jsonl(&mut file).unwrap()
                             }
                         }
                     });
