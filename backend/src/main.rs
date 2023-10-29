@@ -1,13 +1,17 @@
 #[macro_use]
 extern crate mopa;
+
+extern crate pty;
 mod conversation;
 mod editor;
 mod frontend;
 mod model_server;
+mod mpty;
+mod nexos;
 mod openai;
 mod templates;
-mod nexos;
 use anyhow::Context;
+use chrono::Local;
 use clap::Parser;
 use std::{sync::Arc, time::SystemTime};
 
@@ -32,22 +36,58 @@ enum Subcommands {
         #[arg(short, long)]
         derived_flag: bool,
     },
-    Server {},
-    Frontend {},
+    Server {
+        #[arg(short, long, default_value = "real.db")]
+        db: String,
+    },
+    Migrate {
+        #[arg(short, long, default_value = "real.db")]
+        db: String,
+
+        #[arg(short, long, default_value = "migrate_copy.db")]
+        copy_name: String,
+    },
+    Frontend {
+        #[arg(short, long, default_value = "real.db")]
+        db: String,
+    },
 }
 
 fn main() {
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
     let subcommands = Cli::parse();
-    let db = jammdb::DB::open("real.db").unwrap();
-    let mut conversations = Conversations::new(Arc::new(db), None).unwrap();
     println!("{:?}", subcommands);
     match subcommands.command {
-        Subcommands::Frontend {} => launch_gui(conversations).unwrap(),
+        Subcommands::Frontend { db } => {
+            make_copy(&db).unwrap();
+            launch_gui(db).unwrap()
+        }
+        Subcommands::Migrate { db, copy_name } => migrate(db, copy_name).unwrap(),
+        Subcommands::Test { .. } => mpty::testpty(),
+
         // Subcommands::Test { .. } => test().await,
         // Subcommands::Server { .. } => server().await.unwrap(),
-        _ => {}
+        _ => todo!(),
     }
+}
+fn make_copy(db: &str) -> anyhow::Result<()> {
+    std::fs::create_dir_all("backups")?;
+    let backup_name = format!("backups/{}.db", Local::now().format("%Y-%m-%d-%H-%M-%S"));
+    std::fs::copy(db, backup_name)?;
+
+    Ok(())
+}
+fn migrate(db: String, copy_name: String) -> anyhow::Result<()> {
+    println!("making copy");
+    std::fs::copy(&db, copy_name)?;
+    let db = jammdb::DB::open(db).unwrap();
+    let mut conversations = Conversations::new(Arc::new(db), None).unwrap();
+
+    for conversation in conversations.clone().into_iter() {
+        conversations.insert(&mut conversation.1.clone())?;
+    }
+
+    Ok(())
 }
 async fn server() -> anyhow::Result<()> {
     println!("fuck!");
@@ -69,10 +109,13 @@ async fn server() -> anyhow::Result<()> {
     Ok(())
 }
 async fn test() {
-    let resp = StatusResp {body: ServerStatus::Generating { text: "chicken".into() }};
-    dbg!("{:?}",&resp);
-    println!("{}",serde_json::to_string(&resp).unwrap());
-
+    let resp = StatusResp {
+        body: ServerStatus::Generating {
+            text: "chicken".into(),
+        },
+    };
+    dbg!("{:?}", &resp);
+    println!("{}", serde_json::to_string(&resp).unwrap());
 }
 // async fn test() {
 //     let mut conversation = Conversation::default();

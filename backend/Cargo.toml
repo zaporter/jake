@@ -12,7 +12,7 @@ bollard = "0.15.0"
 chrono = { version = "0.4.31", features = ["serde"] }
 clap = { version = "4.4.6", features = ["derive"] }
 derivative = "2.2.0"
-eframe = { version = "0.23.0", features = ["serde"] }
+eframe = { version = "0.23.0", features = ["serde","glow"] }
 egui = { version = "0.23.0", features = ["serde"] }
 egui_extras = { version = "0.23.0", features = ["file", "chrono", "datepicker", "image", "http"] }
 env_logger = "0.10.0"
@@ -22,12 +22,15 @@ jammdb = "0.10.0"
 jsonl = "4.0.1"
 mopa = "0.2.2"
 openai_api_rust = "0.1.8"
+pty = "0.2.2"
 regex = "1.10.1"
 reqwest = { version = "0.11.20", features = ["json"] }
 rmp-serde = "1.1.2"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0.107"
+shellwords = "1.1.0"
 strum_macros = "0.25.2"
+tar = "0.4.40"
 tempfile = "3.8.0"
 tera = "1.19.1"
 tokio = { version = "1.32.0", features = ["full"] }

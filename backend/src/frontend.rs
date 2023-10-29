@@ -4,17 +4,20 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use eframe::egui;
+use eframe::{egui, HardwareAcceleration};
 use egui::{Ui, Widget, WidgetInfo};
 
 use crate::{
-    conversation::{Conversation, Conversations, Message, Metadata, User},
+    conversation::{Conversation, ConversationAction, Conversations, Message, Metadata, User},
     model_server::{GenerationConfig, InferReq, InferenceServerArgs, ServerManager, ServerStatus},
     nexos::{extract_commands, LogLine, NexosInstance},
 };
-pub fn launch_gui(conversations: Conversations) -> anyhow::Result<()> {
+pub fn launch_gui(db: String) -> anyhow::Result<()> {
+    let db = jammdb::DB::open(db).unwrap();
+    let mut conversations = Conversations::new(Arc::new(db), None).unwrap();
     let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::vec2(300.0, 240.0)),
+        // initial_window_size: Some(egui::vec2(300.0, 240.0)),
+        // hardware_acceleration: HardwareAcceleration::,
         ..Default::default()
     };
     eframe::run_native(
@@ -22,7 +25,7 @@ pub fn launch_gui(conversations: Conversations) -> anyhow::Result<()> {
         options,
         Box::new(|cc| {
             // This gives us image support:
-            egui_extras::install_image_loaders(&cc.egui_ctx);
+            // egui_extras::install_image_loaders(&cc.egui_ctx);
 
             Box::new(MyApp::new(conversations))
         }),
@@ -67,7 +70,19 @@ impl eframe::App for MyApp {
                         }
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        for (u, c) in self.conversations.clone().into_iter() {
+                        let mut conversations = self
+                            .conversations
+                            .clone()
+                            .into_iter()
+                            .collect::<Vec<(String, Conversation)>>();
+
+                        conversations.sort_by(|(_, b), (_, a)| {
+                            a.time
+                                .partial_cmp(&b.time)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+
+                        for (u, _) in conversations {
                             if ui.button(u.clone()).clicked() {
                                 self.selected_convo = Some(u.clone());
                             }
@@ -83,101 +98,74 @@ impl eframe::App for MyApp {
             });
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        if let Some(ref convo_id) = self.selected_convo {
-                            if ui.button("delete").clicked() {
-                                let res = self.conversations.delete(convo_id);
-                                if res.is_err() {
-                                    println!("failed to delete a convo {:?}", res)
+                    egui::ScrollArea::vertical()
+                        .id_source("message_info")
+                        .show(ui, |ui| {
+                            if let Some(ref convo_id) = self.selected_convo {
+                                if ui.button("delete").clicked() {
+                                    let res = self.conversations.delete(convo_id);
+                                    if res.is_err() {
+                                        println!("failed to delete a convo {:?}", res)
+                                    }
+                                    self.selected_convo = None;
+                                    return;
                                 }
-                                self.selected_convo = None;
-                                return;
-                            }
-                            let conversation = self.conversations.get(convo_id);
-                            if let Ok(Some(conversation)) = conversation {
-                                let mut c_conversation = conversation.clone();
-                                let mut to_delete = None;
-                                let mut to_add: Vec<(usize, Message)> = Vec::new();
-                                for i in 0..conversation.messages.len() {
-                                    ui.group(|ui| {
-                                        if ui.button("delete").clicked() {
-                                            to_delete = Some(i);
-                                        }
-                                        let Message {
-                                            ref user,
-                                            ref mut msg,
-                                            ref time,
-                                            ..
-                                        } = c_conversation.messages[i];
-                                        let datetime: chrono::DateTime<chrono::offset::Utc> =
-                                            time.clone().into();
-                                        // ui.label(format!("{}", chrono::DateTime));
-                                        ui.label(datetime.format("%Y-%m-%d %T").to_string());
-                                        ui.label(format!("{}:", user.to_string()));
-                                        let output = egui::TextEdit::multiline(msg)
-                                            .hint_text("Type something!")
-                                            .show(ui);
-                                        if ui.button("eval").clicked() {
-                                            let commands = extract_commands(&msg);
-                                            dbg!(&commands);
-                                            for command in commands {
-                                                let mut out = NexosInstance {};
-                                                let req = out.exec_simple(&command);
-
-                                                let rt =
-                                                    tokio::runtime::Builder::new_current_thread()
-                                                        .enable_all()
-                                                        .build()
-                                                        .unwrap();
-
-                                                // Call the asynchronous connect method using the runtime.
-                                                let result = rt.block_on(req).unwrap();
-                                                let mut msg = String::new();
-                                                for line in &result.output {
-                                                    match line {
-                                                        LogLine::StdOut { message } => {
-                                                            msg += message
-                                                        }
-                                                        LogLine::StdErr { message } => {
-                                                            msg += message
-                                                        }
-                                                    }
-                                                }
-
-                                                to_add.push((
-                                                    i+1,
-                                                    Message {
-                                                        time: SystemTime::now(),
-                                                        user: User::Docker,
-                                                        meta: Metadata::default(),
-                                                        msg,
-                                                    },
-                                                ))
+                                let conversation = self.conversations.get(convo_id);
+                                if let Ok(Some(mut conversation)) = conversation {
+                                    let mut action: Option<ConversationAction> = None;
+                                    for (i, msg) in conversation.messages.iter().enumerate() {
+                                        let mut msg = msg.clone();
+                                        ui.group(|ui| {
+                                            if ui.button("delete").clicked() {
+                                                action = Some(ConversationAction::DeleteMessage {
+                                                    id: msg.id.clone(),
+                                                });
                                             }
-                                        }
-                                        if *user == User::Jake {
-                                            if let Some(ref is) =
-                                                self.server_manager.inference_server
-                                            {
-                                                ui.label("Inference server");
-                                                let status = is.lock().unwrap().status().cloned();
-                                                if status.is_err() {
-                                                    ui.label(format!("Status error {:?}", status));
-                                                    return;
-                                                }
-                                                let status = status.unwrap();
-                                                if let ServerStatus::Ready { .. }
-                                                | ServerStatus::DoneGenerating { .. } = status
+                                            let datetime: chrono::DateTime<chrono::offset::Utc> =
+                                                msg.time.clone().into();
+                                            ui.label(datetime.format("%Y-%m-%d %T").to_string());
+                                            ui.label(format!("{}:", msg.user.to_string()));
+                                            let output = egui::TextEdit::multiline(&mut msg.msg)
+                                                .hint_text("Type something!")
+                                                .desired_width(1000.0)
+                                                .show(ui);
+                                            if ui.button("eval").clicked() {
+                                                action = Some(ConversationAction::EvalMessage {
+                                                    id: msg.id.clone(),
+                                                });
+                                            }
+                                            if msg.user == User::Jake {
+                                                ui.checkbox(
+                                                    &mut msg.meta.exclude_from_training,
+                                                    "exclude",
+                                                );
+                                                if let Some(ref is) =
+                                                    self.server_manager.inference_server
                                                 {
-                                                    if ui.button("infer").clicked() {
-                                                        println!(
-                                                            "{:?}",
-                                                            conversation.msg_training_data(i)
-                                                        );
-                                                        let prompt =
-                                                            conversation.msg_training_data(i);
-                                                        if let Ok(prompt) = prompt {
-                                                            let resp = is
+                                                    ui.label("Inference server");
+                                                    let status =
+                                                        is.lock().unwrap().status().cloned();
+                                                    if status.is_err() {
+                                                        ui.label(format!(
+                                                            "Status error {:?}",
+                                                            status
+                                                        ));
+                                                        return;
+                                                    }
+                                                    let status = status.unwrap();
+                                                    if let ServerStatus::Ready { .. }
+                                                    | ServerStatus::DoneGenerating { .. } =
+                                                        status
+                                                    {
+                                                        if ui.button("infer").clicked() {
+                                                            println!(
+                                                                "{:?}",
+                                                                conversation.msg_training_data(i)
+                                                            );
+                                                            let prompt =
+                                                                conversation.msg_training_data(i);
+                                                            if let Ok(prompt) = prompt {
+                                                                let resp = is
                                                                 .lock()
                                                                 .unwrap()
                                                                 .infer(InferReq {
@@ -186,62 +174,58 @@ impl eframe::App for MyApp {
                                                                         GenerationConfig::default(),
                                                                 })
                                                                 .unwrap();
-                                                            println!("{:?}", resp)
+                                                                println!("{:?}", resp)
+                                                            }
+                                                        }
+                                                    };
+
+                                                    if let ServerStatus::DoneGenerating {
+                                                        text: val,
+                                                    } = status
+                                                    {
+                                                        if ui.button("copy into").clicked() {
+                                                            msg.msg = String::from(val);
                                                         }
                                                     }
                                                 };
-
-                                                if let ServerStatus::DoneGenerating { text: val } =
-                                                    status
-                                                {
-                                                    if ui.button("copy into").clicked() {
-                                                        *msg = String::from(val);
-                                                    }
-                                                }
                                             };
-                                        };
-                                    });
-                                }
-                                if ui.button("+ User").clicked() {
-                                    c_conversation.messages.push(Message {
-                                        time: SystemTime::now(),
-                                        user: User::Zack,
-                                        meta: Metadata::default(),
-                                        msg: String::new(),
-                                    })
-                                }
-                                if ui.button("+ Assistant").clicked() {
-                                    c_conversation.messages.push(Message {
-                                        time: SystemTime::now(),
-                                        user: User::Jake,
-                                        meta: Metadata::default(),
-                                        msg: String::new(),
-                                    })
-                                }
-                                if let Some(i) = to_delete {
-                                    c_conversation.messages.remove(i);
-                                }
-                                for (i, msg) in to_add.into_iter().rev() {
-                                    c_conversation.messages.insert(i, msg)
-                                }
-                                if c_conversation != conversation {
-                                    let res = self.conversations.insert(&mut c_conversation);
-                                    if let Err(res) = res {
-                                        println!("deleting {:?}", res)
+                                        });
+                                        if msg != conversation.messages[i] {
+                                            action = Some(ConversationAction::MutateMessage {
+                                                new_message: msg,
+                                            })
+                                        }
                                     }
-
-                                    return;
+                                    if ui.button("+ User").clicked() {
+                                        action = Some(ConversationAction::AddMessage {
+                                            index: None,
+                                            user: User::Zack,
+                                        });
+                                    }
+                                    if ui.button("+ Assistant").clicked() {
+                                        action = Some(ConversationAction::AddMessage {
+                                            index: None,
+                                            user: User::Jake,
+                                        });
+                                    }
+                                    if let Some(action) = action {
+                                        conversation.apply(action).unwrap();
+                                        let res = self.conversations.insert(&mut conversation);
+                                        if let Err(res) = res {
+                                            println!("err saving {:?}", res)
+                                        }
+                                        return;
+                                    }
+                                } else {
+                                    println!(
+                                        "failed to read conversation {},{:?}",
+                                        convo_id, conversation
+                                    )
                                 }
                             } else {
-                                println!(
-                                    "failed to read conversation {},{:?}",
-                                    convo_id, conversation
-                                )
+                                ui.label("Select a conversation to begin");
                             }
-                        } else {
-                            ui.label("Select a conversation to begin");
-                        }
-                    });
+                        });
                 });
 
                 ui.vertical(|ui| {
@@ -289,13 +273,24 @@ impl eframe::App for MyApp {
                                 ui.label(format!("Status: {}", status.to_string()));
                                 match status {
                                     ServerStatus::Generating { text } => {
-                                        ui.label(text);
+                                        egui::ScrollArea::vertical()
+                                            .max_width(500.0)
+                                            .id_source("generating")
+                                            .show(ui, |ui| {
+                                                ui.label(text);
+                                            });
+
                                         if ui.button("stop").clicked() {
                                             is.lock().unwrap().stop().unwrap();
                                         }
                                     }
                                     ServerStatus::DoneGenerating { text } => {
-                                        ui.label(text);
+                                        egui::ScrollArea::vertical()
+                                            .max_width(500.0)
+                                            .id_source("done_generating")
+                                            .show(ui, |ui| {
+                                                ui.label(text);
+                                            });
                                         if ui.button("infer!").clicked() {
                                             println!("inferclicked");
                                             let resp = is

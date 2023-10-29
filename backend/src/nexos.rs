@@ -14,18 +14,60 @@ use bollard::image::CreateImageOptions;
 
 use futures_util::stream::StreamExt;
 use futures_util::TryStreamExt;
-pub fn extract_commands(input: &str) -> Vec<String> {
-    let pattern = r"(\[<)(?P<command>[^(>\])]*)(>\])";
-    let re = Regex::new(pattern).unwrap();
-    let mut commands = Vec::new();
+use strum_macros::Display;
+// pub fn extract_commands(input: &str) -> Vec<String> {
+//     let pattern = r"(\[<)(?P<command>[^(>\])]*)(>\])";
+//     // let pattern = r"(\[<)(?P<command>.*?)(?=>\])(>\])";
+//     let re = Regex::new(pattern).unwrap();
+//     let mut commands = Vec::new();
 
-    for cap in re.captures_iter(input) {
-        if let Some(matched) = cap.name("command") {
-            commands.push(matched.as_str().to_string());
+//     for cap in re.captures_iter(input) {
+//         if let Some(matched) = cap.name("command") {
+//             commands.push(matched.as_str().to_string());
+//         }
+//     }
+
+//     commands
+// }
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    Nexos(String),
+    System(String),
+}
+pub fn extract_commands(s: &str) -> Vec<Command> {
+    let mut results = Vec::new();
+    let mut capture = false;
+    let mut capture_char = '0';
+    let mut buffer = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if i < chars.len() - 2 && chars[i] == '[' && (chars[i + 1] == '<' || chars[i + 1] == '(') {
+            capture = true;
+            match chars[i + 1] {
+                '<' => capture_char = '>',
+                '(' => capture_char = ')',
+                _ => unreachable!(),
+            }
+            i += 1; // Skip the next character
+        } else if i < chars.len() - 1 && capture && chars[i] == capture_char && chars[i + 1] == ']'
+        {
+            capture = false;
+
+            let cmd = match capture_char {
+                '>' => Command::Nexos(buffer.clone()),
+                ')' => Command::System(buffer.clone()),
+                _ => unreachable!(),
+            };
+            results.push(cmd);
+            buffer.clear();
+        } else if capture {
+            buffer.push(chars[i]);
         }
+        i += 1;
     }
-
-    commands
+    results
 }
 
 pub struct NexosInstance {}
@@ -41,26 +83,42 @@ pub enum LogLine {
     StdErr { message: String },
 }
 impl NexosInstance {
+    pub async fn rebuild(&mut self) -> anyhow::Result<DockerResult> {
+        let IMAGE = "nexos:latest";
+        let docker = Docker::connect_with_socket_defaults().unwrap();
+        let mut result = DockerResult::default();
+        let mut tar = tar::Builder::new(Vec::new());
+        tar.append_dir_all(".", "/home/zack/personal/jake/nexos/persist/System")?; // Tar up the current directory, which contains the Dockerfile
+
+        let tarball = tar.into_inner()?;
+        let mut image_build_stream = docker.build_image(
+            bollard::image::BuildImageOptions {
+                dockerfile: "Dockerfile.txt",
+                t: IMAGE,
+                rm: true,
+                ..Default::default()
+            },
+            None,
+            Some(tarball.into()),
+        );
+        while let Some(msg) = image_build_stream.next().await {
+            println!("Message: {msg:?}");
+            result.output.push(LogLine::StdErr {
+                message: format!("{msg:?}"),
+            })
+        }
+        return Ok(result);
+    }
     // This does not have to be mutable but I am using the borrow checker to ensure
     // this isn't concurrently modified
     pub async fn exec_simple(&mut self, command: &str) -> anyhow::Result<DockerResult> {
         // Create a Docker connection
         // Iterate over logs and print them based on their StreamType
         //
+        //
+        let mut result = DockerResult::default();
         let docker = Docker::connect_with_socket_defaults().unwrap();
         let IMAGE = "nexos:latest";
-
-        // docker
-        //     .create_image(
-        //         Some(CreateImageOptions {
-        //             from_image: IMAGE,
-        //             ..Default::default()
-        //         }),
-        //         None,
-        //         None,
-        //     )
-        //     .try_collect::<Vec<_>>()
-        //     .await?;
 
         let alpine_config = Config {
             image: Some(IMAGE),
@@ -87,13 +145,12 @@ impl NexosInstance {
                 CreateExecOptions {
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    cmd: Some(vec!["zsh", "-c", command]),
+                    cmd: Some(vec!["zsh", "-c", &format!("source ~/.zshrc; {}", command)]),
                     ..Default::default()
                 },
             )
             .await?
             .id;
-        let mut result = DockerResult::default();
         if let StartExecResults::Attached { mut output, .. } =
             docker.start_exec(&exec, None).await?
         {
