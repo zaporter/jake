@@ -14,7 +14,8 @@ use uuid::Uuid;
 
 use crate::nexos::{extract_commands, Command, LogLine, NexosInstance};
 use crate::templates::{
-    self, MessagePromptTemplateEntry, MetadataPromptTemplateEntry, PromptTemplateData,
+    self, InjectedFileTemplateData, MessagePromptTemplateEntry, MetadataPromptTemplateEntry,
+    PromptTemplateData,
 };
 pub enum Programs {}
 
@@ -114,12 +115,33 @@ impl Message {
         }
         Ok(res)
     }
-    pub fn eval(&mut self, conversation: &Conversation) -> anyhow::Result<Vec<Message>> {
+    pub fn eval(
+        &mut self,
+        conversation: &Conversation,
+    ) -> anyhow::Result<(Vec<Message>, Vec<InjectedFile>)> {
         let commands = extract_commands(&self.msg);
         dbg!(&commands);
-        let mut to_ret = Vec::new();
+        let mut new_msgs = Vec::new();
+        let mut new_injected_files = Vec::new();
         // clear the metadata every time. It should be generated through the eval
         self.meta = Metadata::default();
+        // preprocess commands to find abort an abort command if it exists
+        // early-exit if it does
+        for command in &commands {
+            if let Command::System(command) = command {
+                let mut args = shellwords::split(&command)?;
+                // add an extra empty string as the program name here
+                args.insert(0, String::new());
+                let subcommands = SystemCli::try_parse_from(args);
+                if let Ok(subcommand) = subcommands {
+                    if let SystemSubcommand::Abort {} = subcommand.command {
+                        new_msgs.push(Message::new_with_msg(User::System, "Aborted.".to_string()));
+                        // early-exit
+                        return Ok((new_msgs, new_injected_files));
+                    }
+                }
+            }
+        }
         for command in commands {
             let mut out = NexosInstance {};
             match command {
@@ -141,13 +163,12 @@ impl Message {
                         }
                     }
 
-                    to_ret.push(Message::new_with_msg(User::Docker, msg));
+                    new_msgs.push(Message::new_with_msg(User::Docker, msg));
                 }
                 Command::System(command) => {
                     let mut args = shellwords::split(&command)?;
                     // add an extra empty string as the program name here
                     args.insert(0, String::new());
-
                     let subcommands = SystemCli::try_parse_from(args);
                     match subcommands {
                         Ok(subcommands) => match subcommands.command {
@@ -163,7 +184,7 @@ impl Message {
                                         id: uuid.to_string(),
                                     });
 
-                                    to_ret.push(Message::new_with_msg(
+                                    new_msgs.push(Message::new_with_msg(
                                         User::System,
                                         format!("Task \"{}\" started", name.clone()),
                                     ));
@@ -190,7 +211,7 @@ impl Message {
                                     );
                                     new_msg.meta.omit_history_until =
                                         Some(exited_task.msg_start_id.clone());
-                                    to_ret.push(new_msg);
+                                    new_msgs.push(new_msg);
                                 }
                             },
                             SystemSubcommand::Nexos { command } => match command {
@@ -213,19 +234,79 @@ impl Message {
                                         }
                                     }
 
-                                    to_ret.push(Message::new_with_msg(User::Docker, msg));
+                                    new_msgs.push(Message::new_with_msg(User::Docker, msg));
                                 }
                             },
+                            SystemSubcommand::Memory { command } => match command {
+                                SystemMemoryCommand::Study { filename, context } => {
+                                    match std::fs::read_to_string(format!(
+                                        "/home/zack/personal/jake/nexos/persist/{}",
+                                        filename
+                                    )) {
+                                        Ok(filetext) => {
+                                            let uuid = uuid::Uuid::new_v4();
+                                            let file = InjectedFile {
+                                                id: uuid.to_string(),
+                                                msg_id: self.id.clone(),
+                                                time: SystemTime::now(),
+                                                filename,
+                                                context,
+                                                filetext,
+                                            };
+                                            new_injected_files.push(file);
+                                        }
+                                        Err(e) => {
+                                            println!("error: {e}");
+                                            new_msgs.push(Message::new_with_msg(
+                                                User::System,
+                                                format!("unable to read file {}", filename),
+                                            ));
+                                        }
+                                    }
+                                }
+                            },
+                            SystemSubcommand::Abort {} => unreachable!("abort found in main loop"),
                         },
                         Err(e) => {
-                            to_ret.push(Message::new_with_msg(User::Docker, e.to_string()));
+                            new_msgs.push(Message::new_with_msg(User::Docker, e.to_string()));
                         }
                     }
                 }
                 _ => todo!(),
             }
         }
-        Ok(to_ret)
+        Ok((new_msgs, new_injected_files))
+    }
+}
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct InjectedFile {
+    pub id: String,
+    pub msg_id: String,
+    pub time: SystemTime,
+    pub filename: String,
+    pub context: String,
+    pub filetext: String,
+}
+impl InjectedFile {
+    pub fn to_template_data(&self) -> anyhow::Result<InjectedFileTemplateData> {
+        let mut metadata = Vec::new();
+        let datetime: chrono::DateTime<chrono::offset::Utc> = self.time.clone().into();
+        metadata.push(MetadataPromptTemplateEntry {
+            key: "Time".to_string(),
+            value: datetime.format("%Y-%m-%d %T").to_string(),
+        });
+        metadata.push(MetadataPromptTemplateEntry {
+            key: "Filename".to_string(),
+            value: self.filename.to_string(),
+        });
+        metadata.push(MetadataPromptTemplateEntry {
+            key: "Context".to_string(),
+            value: self.context.to_string(),
+        });
+        Ok(InjectedFileTemplateData {
+            meta: metadata,
+            filetext: self.filetext.to_string(),
+        })
     }
 }
 
@@ -235,15 +316,20 @@ pub struct Conversation {
     pub messages: Vec<Message>,
     #[serde(default = "field_1_default")]
     pub time: SystemTime,
+    pub injected_files: Vec<InjectedFile>,
 }
 impl Default for Conversation {
     fn default() -> Self {
         Self {
             id: Option::default(),
             messages: Vec::default(),
+            injected_files: Vec::default(),
             time: SystemTime::now(),
         }
     }
+}
+fn field_2_default() -> Vec<InjectedFile> {
+    Vec::new()
 }
 fn field_1_default() -> SystemTime {
     SystemTime::now()
@@ -307,6 +393,11 @@ impl Conversation {
                 data.push(self.msg_training_data(i)?)
             }
         }
+        for file in &self.injected_files {
+            let template = file.to_template_data()?;
+            let datum = templates::injested_file(&template)?;
+            data.push(datum);
+        }
         return Ok(data);
     }
     pub fn write_jsonl<W: std::io::Write>(&self, writer: &mut W) -> anyhow::Result<()> {
@@ -355,11 +446,14 @@ impl Conversation {
                     .ok_or(anyhow::anyhow!("failed to eval because did not find id"))?
                     .clone();
                 let mut msg = msg.clone();
-                let mut to_add = msg.eval(&self)?;
+                let (mut new_msgs, new_files) = msg.eval(&self)?;
                 self.messages[index] = msg;
-                to_add.reverse();
-                for newmsg in to_add {
+                new_msgs.reverse();
+                for newmsg in new_msgs {
                     self.messages.insert(index + 1, newmsg)
+                }
+                for newfile in new_files {
+                    self.injected_files.push(newfile)
                 }
             }
             ConversationAction::DeleteMessage { id } => {
@@ -575,11 +669,18 @@ enum SystemSubcommand {
         #[command(subcommand)]
         command: SystemNexosCommand,
     },
+    /// Work with your memory
+    Memory {
+        #[command(subcommand)]
+        command: SystemMemoryCommand,
+    },
     /// Work with and create Tasks
     Task {
         #[command(subcommand)]
         command: TaskNexosCommand,
     },
+    /// Abort and do not run any of the commands that would have been executed
+    Abort {},
 }
 
 #[derive(Subcommand, Debug)]
@@ -588,6 +689,18 @@ enum SystemNexosCommand {
     Rebuild {},
 }
 
+#[derive(Subcommand, Debug)]
+enum SystemMemoryCommand {
+    /// Study a file
+    Study {
+        /// Path to the file from your home directory (ex: Projects/SomeProject/test.txt)
+        #[arg(short, long)]
+        filename: String,
+        /// Context about why you are studying this file and what to pay attention to
+        #[arg(short, long)]
+        context: String,
+    },
+}
 #[derive(Subcommand, Debug)]
 enum TaskNexosCommand {
     /// Create and start a new task

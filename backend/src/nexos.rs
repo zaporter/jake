@@ -247,7 +247,13 @@ mod tests {
         let input_str = "Some random text [<sh command1>] and [<command2>] etc.";
         let commands = extract_commands(input_str);
 
-        assert_eq!(commands, vec!["sh command1", "command2"]);
+        assert_eq!(
+            commands,
+            vec![
+                Command::Nexos("sh command1".into()),
+                Command::Nexos("command2".into())
+            ]
+        );
 
         // Additional test cases and assertions can be added here.
     }

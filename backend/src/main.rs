@@ -10,6 +10,7 @@ mod mpty;
 mod nexos;
 mod openai;
 mod templates;
+mod token;
 use anyhow::Context;
 use chrono::Local;
 use clap::Parser;

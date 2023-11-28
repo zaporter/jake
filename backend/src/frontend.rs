@@ -5,7 +5,7 @@ use std::{
 };
 
 use eframe::{egui, HardwareAcceleration};
-use egui::{Ui, Widget, WidgetInfo};
+use egui::{Ui, Widget, WidgetInfo, TextStyle, Style};
 
 use crate::{
     conversation::{Conversation, ConversationAction, Conversations, Message, Metadata, User},
@@ -52,6 +52,9 @@ impl eframe::App for MyApp {
         ctx.request_repaint_after(Duration::from_millis(50));
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Jake");
+            let mut style = Style::default();
+            style.override_text_style = Some(TextStyle::Monospace);
+            ui.set_style(style);
 
             egui::SidePanel::left("left_panel")
                 .resizable(true)
